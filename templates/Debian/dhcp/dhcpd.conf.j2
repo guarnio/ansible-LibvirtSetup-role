@@ -1,0 +1,59 @@
+ddns-update-style interim;
+
+allow booting;
+allow bootp;
+
+ignore client-updates;
+set vendorclass = option vendor-class-identifier;
+option space pxelinux;
+option pxelinux.magic code 208 = string;
+option pxelinux.configfile code 209 = text;
+option pxelinux.pathprefix code 210 = text;
+option pxelinux.reboottime code 211 = unsigned integer 32;
+option architecture-type code 93 = unsigned integer 16;
+
+{% for each in managed_domains %}
+subnet {{each.network}} netmask {{each.netmask}} {
+
+      option routers             {{each.gateway}};
+      option domain-name-servers {{each.dns}};
+      option subnet-mask         {{each.netmask}};
+      option domain-name         "{{each.dns_domain}}";
+
+      range 			               {{each.dhcp_range.start}}  {{each.dhcp_range.end}};
+      range dynamic-bootp        {{each.dhcp_boot_range.start}}  {{each.dhcp_boot_range.end}};
+      default-lease-time         21600;
+      max-lease-time             43200;
+
+      class "pxeclients" {
+      match if substring (option vendor-class-identifier, 0, 9) = "PXEClient";
+      next-server {{each.next_server}};
+
+      if option architecture-type = 00:07 {
+        filename "/uefi/shim.efi";
+      }
+      if option architecture-type = 00:09 {
+        filename "/uefi/shim.efi";
+      } else {
+        filename "pxelinux/pxelinux.0";
+        #filename "pxelinux.0";
+      }
+
+      }
+
+}
+{%endfor%}
+
+{% if static_hosts is defined %}
+{% for each in static_hosts %}
+host {{each.hostname}} {
+		hardware ethernet {{each.macaddress}};
+		fixed-address {{each.ipaddress}};
+}
+{%endfor%}
+{%endif%}
+
+# group for Cobbler DHCP tag: default
+# group {
+# }
+#

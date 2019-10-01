@@ -1,0 +1,18 @@
+- name: check if firewalld is running
+  shell: "[ $(systemctl is-active firewalld) == 'active' ] && { echo True; } || { echo False; }"
+  register: _fw_status
+  become: true
+
+- name: open firewall ports
+  firewalld:
+    service: "{{item}}"
+    permanent: true
+    state: enabled
+    immediate: true
+  with_items:
+    - "http"
+    - "tftp"
+    - "dhcp"
+    - "http"
+  when: '_fw_status.stdout == "True"'
+  become: true

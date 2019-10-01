@@ -1,0 +1,20 @@
+---
+# defaults file for ansible-LibvirtSetup
+
+install_packages: false
+libvirt_subnets_dictionary: {}
+managed_domains: {}
+
+tftp_dirs:
+  - "pxelinux"
+  - "pxelinux/pxelinux.cfg"
+  - "pxelinux/images"
+
+pxe_images:
+  - vmlinuz
+  - initrd.img
+
+pxe_boot_files:
+  - vesamenu.c32
+  - pxelinux.0
+  - menu.c32

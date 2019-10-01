@@ -1,0 +1,160 @@
+- debug: msg="This is RedHat, now IBM :-("
+
+- name: set tftp root fact
+  set_fact:
+      tftp_root: "/var/lib/tftpboot"
+
+- name: set bind configuration folder
+  set_fact:
+    bind_config_root: "/var/named"
+
+- name: set dhcp toot configuration directory
+  set_fact:
+    dhcp_config_root: "/etc/dhcp"
+
+- name: "install hypervisor role packages"
+  yum:
+    name: "{{item}}"
+    state: present
+  with_items:
+    - libvirt
+    - qemu-kvm
+    - virt-install
+  become: true
+  when: install_packages
+
+- name: "install storage role packages"
+  yum:
+    name: "{{item}}"
+    state: present
+  with_items:
+    - httpd
+    - tftp-server
+  become: true
+  when: install_packages
+
+- name: "install support role packages"
+  yum:
+    name: "{{item}}"
+    state: present
+  with_items:
+    - dhcp
+    - bind
+  become: true
+  when: install_packages
+
+- name: start libvirt daemon
+  service:
+    enabled: true
+    name: libvirtd
+    state: started
+  become: true
+
+- name: deploy bind configuration
+  template:
+    src: RedHat/bind9/named.conf.local.j2
+    dest: "/etc/named.local"
+  become: true
+  notify: restart_named
+
+- name: deploy bind managed domains configuration (forward)
+  template:
+    src: RedHat/bind9/bind_forward.j2
+    dest: "{{bind_config_root}}/{{item.dns_domain}}.local"
+  with_items: "{{managed_domains}}"
+  become: true
+  notify: restart_named
+
+- name: deploy bind managed domains configuration (reverse)
+  template:
+    src: RedHat/bind9/bind_reverse.j2
+    dest: "{{bind_config_root}}/db.{{item.network.split('.')[2] + '.' + item.network.split('.')[1] + '.' + item.network.split('.')[0]}}"
+  with_items: "{{managed_domains}}"
+  become: true
+  notify: restart_named
+
+- name: include additional zones to bind main config file
+  lineinfile:
+    path: /etc/named.conf
+    state: present
+    line: include "/etc/named.local";
+  become: true
+
+- name: deploy dhcp configuraton
+  template:
+    src: RedHat/dhcp/dhcpd.conf.j2
+    dest: "{{dhcp_config_root}}/dhcpd.conf"
+  become: true
+  notify: restart_dhcp_rh
+
+- name: get existing networks
+  shell: virsh net-list --all --name | grep -v "^\s*$"
+  register: libvirt_net_list
+  failed_when: false
+  become: true
+
+- name: get active networks
+  shell: virsh net-list --name | grep -v "^\s*$"
+  register: libvirt_active_net_list
+  failed_when: false
+  become: true
+
+- name: get existing libvirt nat networks
+  shell: virsh net-dumpxml {{ item }}| grep "ip address"| sed "s/^\s*.*address\=\'\(.*\)\'.*\'\(.*\)\'>$/\1/"
+  register: libvirt_net_list
+  with_items: "{{libvirt_net_list.stdout_lines}}"
+  ignore_errors: false
+  become: true
+
+- name: "create libvirt networks dictionary"
+  set_fact:
+    libvirt_subnets_dictionary: "{{ libvirt_subnets_dictionary | combine( {item.item: item.stdout_lines} )  }}"
+  with_items: "{{libvirt_net_list.results}}"
+
+- debug: var=libvirt_subnets_dictionary
+
+- name: delete default network
+  shell: virsh net-destroy default; virsh net-undefine default
+  when: libvirt_subnets_dictionary['default'] is defined
+  become: true
+
+- name: create missing networks configuration file
+  template:
+    src: "RedHat/libvirt/libvirt_nat_network.xml.j2"
+    dest: "/tmp/{{item.dns_domain}}.xml"
+  with_items: "{{managed_domains}}"
+  when: (libvirt_subnets_dictionary[item.dns_domain] is not defined) or (item.gateway not in libvirt_subnets_dictionary[item.dns_domain])
+  become: true
+
+- name: create libvirt networks
+  shell: "virsh net-define /tmp/{{item.dns_domain}}.xml"
+  with_items: "{{managed_domains}}"
+  when: (libvirt_subnets_dictionary[item.dns_domain] is not defined) or (item.gateway not in libvirt_subnets_dictionary[item.dns_domain])
+  register: _created_network
+  become: true
+
+- name: start networks
+  shell: "virsh net-start {{item.dns_domain}}"
+  with_items: "{{managed_domains}}"
+  when: (item.dns_domain not in libvirt_active_net_list.stdout_lines) and _created_network.changed
+  become: true
+
+- name: set networks to autostart
+  shell: "virsh net-autostart {{item.dns_domain}}"
+  with_items: "{{managed_domains}}"
+  when: (item.dns_domain not in libvirt_active_net_list.stdout_lines) and _created_network.changed
+  become: true
+
+- name: start daemons
+  service:
+    enabled: true
+    name: "{{item}}"
+    state: started
+  become: true
+  with_items:
+    - named
+    - httpd
+    - tftp
+    - tftp.socket
+    - dhcpd
+    - named

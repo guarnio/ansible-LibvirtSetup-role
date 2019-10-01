@@ -1,0 +1,188 @@
+- debug: msg="This is Debian"
+
+- name: set tftp root fact
+  set_fact:
+      tftp_root: "/var/lib/tftpboot"
+
+- name: set bind configuration folder
+  set_fact:
+    bind_config_root: "/etc/bind"
+
+- name: set dhcp toot configuration directory
+  set_fact:
+    dhcp_config_root: "/etc/dhcp"
+
+- name: "install hypervisor role packages"
+  apt:
+    name: "{{item}}"
+    state: present
+  with_items:
+    - libvirt-bin
+    - libvirt-clients
+    - libvirt-daemon
+    - libvirt-dev
+    - libvirt-doc
+    - qemu-kvm
+    - virtinst
+  become: true
+  when: install_packages
+
+- name: "install storage role packages"
+  apt:
+    name: "{{item}}"
+    state: present
+  with_items:
+    - apache2
+    - tftpd-hpa
+  become: true
+  when: install_packages
+
+- name: "install support role packages"
+  apt:
+    name: "{{item}}"
+    state: present
+  with_items:
+    - isc-dhcp-server
+    - bind9
+  become: true
+  when: install_packages
+
+- name: start libvirt daemon
+  service:
+    enabled: true
+    name: libvirtd
+    state: started
+  become: true
+
+- name: start daemons
+  service:
+    enabled: true
+    name: "{{item}}"
+    state: started
+  become: true
+  with_items:
+    - bind9
+    - apache2
+    - tftpd-hpa
+    - isc-dhcp-server
+
+- name: create iso mount points
+  file:
+    path: "{{item.path}}"
+    state: directory
+    recurse: yes
+  with_items: "{{iso_images}}"
+  become: true
+
+- name: create pxe boot direcoty structure
+  file:
+    path: "{{tftp_root}}/{{item}}"
+    state: directory
+    recurse: yes
+  with_items:
+    - uefi
+    - pxelinux/images
+    - pxelinux/pxelinux.cfg
+  become: true
+
+- name: Mount DVD read-only
+  mount:
+    path: "{{item.path}}"
+    src: "{{item.cd}}"
+    fstype: iso9660
+    opts: ro
+    state: mounted
+  with_items: "{{iso_images}}"
+  become: true
+
+- name: get mounted versions
+  shell: cat {{item.path}}/media.repo | grep name| awk '{print $(NF)}'
+  with_items: "{{iso_images}}"
+  register: rhel_mounted_versions
+
+- name: "create directories for pxe images"
+  file:
+    path: "{{tftp_root}}/pxelinux/images/{{item.stdout}}"
+    state: directory
+    recurse: yes
+  with_items: "{{rhel_mounted_versions.results}}"
+  become: true
+
+- name: copy to destination directories
+  copy:
+    src: "{{item.0.item.path}}/images/pxeboot/{{item.1}}"
+    dest: "{{tftp_root}}/pxelinux/images/{{item.0.stdout}}"
+  with_nested:
+    - "{{rhel_mounted_versions.results}}"
+    - ['vmlinuz','initrd.img']
+  become: true
+
+- name: deploy bind configuration
+  template:
+    src: Debian/bind9/named.conf.local.j2
+    dest: "{{bind_config_root}}/named.conf.local-pippi"
+  become: true
+  notify: restart_bind9
+
+- name: deploy bind managed domains configuration (forward)
+  template:
+    src: Debian/bind9/bind_forward.j2
+    dest: "{{bind_config_root}}/{{item.dns_domain}}.local"
+  with_items: "{{managed_domains}}"
+  become: true
+  notify: restart_bind9
+
+- name: deploy bind managed domains configuration (reverse)
+  template:
+    src: Debian/bind9/bind_reverse.j2
+    dest: "{{bind_config_root}}/db.{{item.network.split('.')[0] + '.' + item.network.split('.')[1] + '.' + item.network.split('.')[2]}}"
+  with_items: "{{managed_domains}}"
+  become: true
+  notify: restart_bind9
+
+- name: deploy dhcp configuraton
+  template:
+    src: Debian/dhcp/dhcpd.conf.j2
+    dest: "{{dhcp_config_root}}/dhcpd.conf"
+  become: true
+  notify: restart_dhcp
+
+- name: get existing networks
+  shell: virsh net-list --all --name | grep -v "^\s*$"
+  register: libvirt_net_list
+
+- name: get active networks
+  shell: virsh net-list --name | grep -v "^\s*$"
+  register: libvirt_active_net_list
+
+- name: get existing libvirt nat networks
+  shell: virsh net-dumpxml {{ item }}| grep "ip address"| sed "s/^\s*.*address\=\'\(.*\)\'.*\'\(.*\)\'>$/\1/"
+  register: libvirt_net_list
+  with_items: "{{libvirt_net_list.stdout_lines}}"
+
+- name: "create libvirt networks dictionary"
+  set_fact:
+    libvirt_subnets_dictionary: "{{ libvirt_subnets_dictionary | combine( {item.item: item.stdout_lines} )  }}"
+  with_items: "{{libvirt_net_list.results}}"
+
+- name: create missing networks configuration file
+  template:
+    src: "Debian/libvirt/libvirt_nat_network.xml.j2"
+    dest: "/tmp/{{item.dns_domain}}.xml"
+  with_items: "{{managed_domains}}"
+  when: item.gateway not in libvirt_subnets_dictionary[item.dns_domain]
+
+- name: create libvirt networks
+  shell: "virsh net-define /tmp/{{item.dns_domain}}.xml"
+  with_items: "{{managed_domains}}"
+  when: item.gateway not in libvirt_subnets_dictionary[item.dns_domain]
+
+- name: start networks
+  shell: "virsh net-start {{item.dns_domain}}"
+  with_items: "{{managed_domains}}"
+  when: item.dns_domain not in libvirt_active_net_list.stdout_lines
+
+- name: set networks to autostart
+  shell: "virsh net-autostart {{item.dns_domain}}"
+  with_items: "{{managed_domains}}"
+  when: item.dns_domain not in libvirt_active_net_list.stdout_lines

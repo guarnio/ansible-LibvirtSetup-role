@@ -1,0 +1,58 @@
+---
+# handlers file for ansible-LibvirtSetup
+
+- name: restart_bind9
+  service:
+    name: "bind9"
+    state: restarted
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: restart_named
+  service:
+    name: "named"
+    state: restarted
+  become: true
+  when: ansible_os_family == "RedHat"
+
+- name: restart_apache2
+  service:
+    name: "apache2"
+    state: restarted
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: restart_apache2
+  service:
+    name: "httpd"
+    state: restarted
+  become: true
+  when: ansible_os_family == "RedHat"
+
+- name: restart_tftpd
+  service:
+    name: "tftpd-hpa"
+    state: restarted
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: restart_tftpd
+  service:
+    name: "tftp"
+    state: restarted
+  become: true
+  when: ansible_os_family == "RedHat"
+
+- name: restart_dhcp
+  service:
+    name: "isc-dhcp-server"
+    state: restarted
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: restart_dhcp_rh
+  service:
+    name: "dhcpd"
+    state: restarted
+  become: true
+  when: ansible_os_family == "RedHat"

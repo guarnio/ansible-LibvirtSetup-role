@@ -1,0 +1,65 @@
+- name: define tftp root directory
+  set_fact:
+    tftp_root: "/var/lib/tftpboot"
+  when: ansible_os_family == "RedHat"
+
+- name: install syslinux
+  yum:
+    name: syslinux
+    state: installed
+  become: true
+
+- name: create dvd mountpoint
+  file:
+    path: "{{item.path}}"
+    state: directory
+    recurse: true
+  with_items: "{{iso_images}}"
+  become: true
+
+- name: mount cd images to destination folders
+  mount:
+    path: "{{item.path}}"
+    src: "{{item.cd}}"
+    state: mounted
+    fstype: iso9660
+  with_items: "{{iso_images}}"
+  become: true
+
+- name: create tftp folder structure
+  file:
+    path: "{{tftp_root}}/{{item}}"
+    state: directory
+    recurse: true
+  with_items: "{{tftp_dirs}}"
+  become: true
+
+- name: create tftp directory per cd
+  file:
+    path: "{{tftp_root}}/pxelinux/images/{{item.desc}}"
+    state: directory
+  with_items: "{{iso_images}}"
+  become: true
+
+- name: copy boot images to directories
+  copy:
+    src: "{{item.0.path}}/isolinux/{{item.1}}"
+    dest: "{{tftp_root}}/pxelinux/images/{{item.0.desc}}/{{item.1}}"
+    remote_src: true
+  with_nested:
+    - "{{iso_images}}"
+    - "{{pxe_images}}"
+  become: true
+
+- name: copy pxe boot files
+  copy:
+    src: "/usr/share/syslinux/{{item}}"
+    dest: "{{tftp_root}}/pxelinux/{{item}}"
+  become: true
+  with_items: "{{pxe_boot_files}}"
+
+- name: deploy boot msg template
+  template:
+    src: "RedHat/tftp_pxe/boot.msg.j2"
+    dest: "{{tftp_root}}/pxelinux/boot.msg"
+  become: true
